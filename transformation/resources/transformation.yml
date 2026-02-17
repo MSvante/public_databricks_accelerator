@@ -1,0 +1,51 @@
+# =============================================================================
+# Transformation Pipeline
+# =============================================================================
+# Single DLT pipeline that processes all source systems.
+#
+# Writes to layer-based catalogs:
+#   - raw.<source_system>.<table> for bronze tables
+#   - cleansed.<source_system>.<table> for silver tables
+#
+# Source systems are auto-discovered from config/ directory.
+# =============================================================================
+
+resources:
+  pipelines:
+    transformation_pipeline:
+      name: "transformation-pipeline"
+
+      # Default catalog (bronze tables go here)
+      catalog: "raw"
+      target: "default"
+
+      # Pipeline settings
+      development: ${bundle.target != "prod"}
+      continuous: false
+      channel: CURRENT
+      photon: true
+
+      # Pipeline libraries
+      libraries:
+        - notebook:
+            path: ./src/main.py
+
+      # Pipeline configuration
+      configuration:
+        landing_zone_uri: ${var.landing_zone_uri}
+        config_path: "/Workspace/${workspace.root_path}/config"
+
+        # Catalog names (layer-based)
+        raw_catalog: "raw"
+        cleansed_catalog: "cleansed"
+        curated_catalog: "curated"
+
+      # Cluster configuration
+      clusters:
+        - label: default
+          num_workers: 1
+          node_type_id: Standard_DS3_v2
+          spark_conf:
+            spark.databricks.delta.schema.autoMerge.enabled: "true"
+          custom_tags:
+            environment: ${bundle.target}

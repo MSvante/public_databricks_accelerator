@@ -1,0 +1,77 @@
+# =============================================================================
+# Transformation Engine - Databricks Asset Bundle
+# =============================================================================
+# Deploys a single transformation pipeline that processes all source systems.
+#
+# Layer-based catalog structure:
+#   - raw catalog: Bronze tables (raw.<source_system>.<table>)
+#   - cleansed catalog: Silver tables (cleansed.<source_system>.<table>)
+#   - curated catalog: Gold tables (curated.<source_system>.<table>)
+#
+# Source systems are auto-discovered from config/ directory.
+#
+# Adding a new source system:
+#   1. Create config/<system>/bronze.yml and silver.yml
+#   2. Create src/transforms/<system>/*.py
+#   3. Deploy: databricks bundle deploy -t <env>
+# =============================================================================
+
+bundle:
+  name: transformation-engine
+
+variables:
+  landing_zone_uri:
+    description: "Base URI for landing zone storage (environment-specific)"
+
+
+# =============================================================================
+# Include Pipeline Definition
+# =============================================================================
+
+include:
+  - resources/*.yml
+
+# =============================================================================
+# Sync Configuration
+# =============================================================================
+
+sync:
+  include:
+    - "src/**/*.py"
+    - "config/**/*.yml"
+
+# =============================================================================
+# Targets (Environments)
+# =============================================================================
+
+targets:
+  # ---------------------------------------------------------------------------
+  # Development Environment
+  # ---------------------------------------------------------------------------
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: "PUT YOUR HOST URL HERE"
+    variables:
+      landing_zone_uri: "abfss://landing-zone-dev@storageaccountforcompany.dfs.core.windows.net"
+
+  # ---------------------------------------------------------------------------
+  # Test Environment
+  # ---------------------------------------------------------------------------
+  test:
+    mode: development
+    workspace:
+      host: "PUT YOUR HOST URL HERE"
+    variables:
+      landing_zone_uri: "abfss://landing-zone-test@storageaccountforcompany.dfs.core.windows.net"
+
+  # ---------------------------------------------------------------------------
+  # Production Environment
+  # ---------------------------------------------------------------------------
+  prod:
+    mode: production
+    workspace:
+      host: "PUT YOUR HOST URL HERE"
+    variables:
+      landing_zone_uri: "abfss://landing-zone-prod@storageaccountforcompany.dfs.core.windows.net"

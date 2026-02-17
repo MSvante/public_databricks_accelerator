@@ -1,0 +1,75 @@
+# =============================================================================
+# Transformation Engine - CD Pipeline
+# =============================================================================
+# Deploys all transformation pipelines to the selected Databricks environment.
+#
+# Triggers:
+#   - Push to main (auto-deploy to dev)
+#   - Manual trigger with environment selection
+#
+# All source systems are deployed together - no manual selection needed.
+# =============================================================================
+
+name: Transformation CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'transformation/**'
+      - '.github/workflows/transformation-cd.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Deploy to Environment
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy (${{ github.event.inputs.environment || 'dev' }})
+    runs-on: ubuntu-latest
+    environment:
+      name: databricks-${{ github.event.inputs.environment || 'dev' }}
+    env:
+      TARGET: ${{ github.event.inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Set environment variables
+        run: |
+          echo "DATABRICKS_HOST_DEV=${{ secrets.DATABRICKS_HOST_DEV }}" >> $GITHUB_ENV
+          echo "DATABRICKS_HOST_TEST=${{ secrets.DATABRICKS_HOST_TEST }}" >> $GITHUB_ENV
+          echo "DATABRICKS_HOST_PROD=${{ secrets.DATABRICKS_HOST_PROD }}" >> $GITHUB_ENV
+
+      - name: Validate bundle
+        working-directory: ./transformation
+        env:
+          DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', env.TARGET)] }}
+        run: databricks bundle validate -t ${{ env.TARGET }}
+
+      - name: Deploy bundle
+        working-directory: ./transformation
+        env:
+          DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', env.TARGET)] }}
+        run: databricks bundle deploy -t ${{ env.TARGET }}
+
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ env.TARGET }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Pipelines deployed**: All source systems" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: Success" >> $GITHUB_STEP_SUMMARY
