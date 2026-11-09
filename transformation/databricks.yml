@@ -1,77 +1,60 @@
 # =============================================================================
-# Transformation Engine - Databricks Asset Bundle
+# Config-driven Lakeflow Declarative Pipelines - Databricks Asset Bundle
 # =============================================================================
-# Deploys a single transformation pipeline that processes all source systems.
+# Everything is serverless, so the bundle runs on Databricks Free Edition.
 #
-# Layer-based catalog structure:
-#   - raw catalog: Bronze tables (raw.<source_system>.<table>)
-#   - cleansed catalog: Silver tables (cleansed.<source_system>.<table>)
-#   - curated catalog: Gold tables (curated.<source_system>.<table>)
+#   databricks bundle deploy -t sandbox
+#   databricks bundle run ldp_setup -t sandbox
+#   databricks bundle run ldp_sample_data -t sandbox            # --batch initial
+#   databricks bundle run ldp_ingest -t sandbox                 # guard -> pipeline -> reconcile
 #
-# Source systems are auto-discovered from config/ directory.
-#
-# Adding a new source system:
-#   1. Create config/<system>/bronze.yml and silver.yml
-#   2. Create src/transforms/<system>/*.py
-#   3. Deploy: databricks bundle deploy -t <env>
+# Targets
+#   sandbox  personal: every table in one schema per developer, no PII vault
+#   dev      shared: schemas per layer/domain, vaulted + public PII streams
+#   prod     shared, production mode, schedule unpaused
 # =============================================================================
 
 bundle:
-  name: transformation-engine
-
-variables:
-  landing_zone_uri:
-    description: "Base URI for landing zone storage (environment-specific)"
-
-
-# =============================================================================
-# Include Pipeline Definition
-# =============================================================================
+  name: ldp_framework
 
 include:
   - resources/*.yml
 
-# =============================================================================
-# Sync Configuration
-# =============================================================================
-
 sync:
   include:
+    - "conf/*.yml"
     - "src/**/*.py"
-    - "config/**/*.yml"
 
-# =============================================================================
-# Targets (Environments)
-# =============================================================================
+variables:
+  catalog:
+    description: Unity Catalog catalog. Free Edition ships with one called `workspace`.
+    default: workspace
+  sandbox_schema:
+    description: Personal schema for the sandbox target (ignored elsewhere).
+    default: sandbox_${workspace.current_user.short_name}
+  landing_root:
+    description: UC volume holding the landing files (created by ldp_setup).
+    default: /Volumes/${var.catalog}/landing/files
+  schedule_pause_status:
+    description: PAUSED everywhere except prod.
+    default: PAUSED
+  alert_emails:
+    type: complex
+    default: []
 
 targets:
-  # ---------------------------------------------------------------------------
-  # Development Environment
-  # ---------------------------------------------------------------------------
-  dev:
+  sandbox:
     mode: development
     default: true
-    workspace:
-      host: "PUT YOUR HOST URL HERE"
-    variables:
-      landing_zone_uri: "abfss://landing-zone-dev@storageaccountforcompany.dfs.core.windows.net"
 
-  # ---------------------------------------------------------------------------
-  # Test Environment
-  # ---------------------------------------------------------------------------
-  test:
+  dev:
     mode: development
-    workspace:
-      host: "PUT YOUR HOST URL HERE"
-    variables:
-      landing_zone_uri: "abfss://landing-zone-test@storageaccountforcompany.dfs.core.windows.net"
+    # workspace:
+    #   host: https://<your-dev-workspace>
 
-  # ---------------------------------------------------------------------------
-  # Production Environment
-  # ---------------------------------------------------------------------------
   prod:
     mode: production
-    workspace:
-      host: "PUT YOUR HOST URL HERE"
+    # workspace:
+    #   host: https://<your-prod-workspace>
     variables:
-      landing_zone_uri: "abfss://landing-zone-prod@storageaccountforcompany.dfs.core.windows.net"
+      schedule_pause_status: UNPAUSED

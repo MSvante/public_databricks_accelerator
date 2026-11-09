@@ -1,113 +1,39 @@
 # Claude Instructions
 
-This repository contains a YAML-driven transformation engine for Databricks using Lakeflow (DLT) pipelines.
+Config-driven Lakeflow Declarative Pipelines framework on Databricks, and the
+companion code for the talk "Declarative Pipelines, Imperative Problems".
+Public repository: keep everything generic. No client names, real table names,
+storage accounts, workspace URLs or personal data.
 
-## Project Overview
+## Layout
 
-- **Framework**: Databricks Asset Bundles with Lakeflow (DLT)
-- **Pattern**: Medallion architecture (bronze/silver/gold)
-- **Configuration**: YAML-driven table definitions with auto-discovery
-- **Environments**: dev, test, prod
+- `transformation/` is the Asset Bundle. Run every command from there.
+- `transformation/src/pipeline.py`: the ONE pipeline file. Thin; logic lives in
+  `src/framework/engine.py`.
+- `transformation/conf/`: `sources.yml` (raw), `data_products.yml` (trusted),
+  `reconciliation.yml` (DQ rules).
+- `transformation/src/data_products/`: one module per trusted table; contract
+  in its README.
+- `transformation/src/jobs/`: setup, sample data, schema guard, reconcile.
 
-## Repository Structure
-
-```
-.
-├── .github/
-│   └── workflows/
-│       ├── transformation-ci.yml    # PR validation (lint, test, bundle validate)
-│       └── transformation-cd.yml    # Deployment (dev/test/prod)
-│
-├── docs/                            # Documentation
-│   ├── data_ingestion_strategy.md   # Ingestion architecture
-│   └── completed_plans/             # Implementation plans
-│
-└── transformation/                  # Main project
-    ├── databricks.yml               # Asset Bundle config with targets
-    ├── resources/
-    │   └── transformation.yml       # DLT pipeline definition
-    ├── config/                      # YAML table definitions
-    │   ├── navision/
-    │   │   ├── bronze.yml
-    │   │   └── silver.yml
-    │   └── entsog/
-    │       ├── bronze.yml
-    │       └── silver.yml
-    └── src/
-        ├── main.py                  # DLT entry point
-        ├── engine/                  # Core engine
-        │   ├── config_loader.py     # YAML parser
-        │   ├── bronze.py            # Bronze layer utilities
-        │   ├── silver.py            # Silver layer utilities
-        │   └── expectations.py      # Data quality
-        └── transforms/              # Source-specific transforms
-            ├── navision/
-            │   ├── customers.py
-            │   ├── orders.py
-            │   ├── order_lines.py
-            │   ├── products.py
-            │   └── vendors.py
-            └── entsog/
-                ├── allocations.py
-                ├── connection_points.py
-                ├── nominations.py
-                └── physical_flows.py
-```
-
-## Key Concepts
-
-### Catalog Structure
-
-Layer-based catalogs with source system schemas:
-- `raw.<source_system>.<table>` - Bronze (raw ingestion)
-- `cleansed.<source_system>.<table>` - Silver (transformed)
-- `curated.<source_system>.<table>` - Gold (business metrics, future)
-
-### Adding a Source System
-
-1. Create `config/<system>/bronze.yml` and `silver.yml`
-2. Create `src/transforms/<system>/*.py`
-3. Deploy: `databricks bundle deploy -t dev`
-
-Source systems are auto-discovered from `config/`.
-
-### Writing Transforms
-
-Transform functions take DataFrames and return DataFrames:
-
-```python
-def transform(df: DataFrame) -> DataFrame:
-    return df.filter(F.col("id").isNotNull())
-```
-
-### Deployment
+## Commands
 
 ```bash
 cd transformation
-databricks bundle validate -t dev
-databricks bundle deploy -t dev
+pytest                                   # Spark tests skip without Java
+ruff check src tests
+databricks bundle validate -t sandbox
+databricks bundle deploy -t sandbox
 ```
 
-## CI/CD
+## Rules
 
-- **CI** (transformation-ci.yml): Lint, type-check, security scan, bundle validate
-- **CD** (transformation-cd.yml): Deploy to dev (auto), test, prod (with approvals)
-
-### Required GitHub Secrets
-
-| Secret | Description |
-|--------|-------------|
-| `DATABRICKS_HOST_DEV` | Dev workspace URL |
-| `DATABRICKS_TOKEN_DEV` | Dev workspace token |
-| `DATABRICKS_HOST_TEST` | Test workspace URL |
-| `DATABRICKS_TOKEN_TEST` | Test workspace token |
-| `DATABRICKS_HOST_PROD` | Prod workspace URL |
-| `DATABRICKS_TOKEN_PROD` | Prod workspace token |
-
-## When Making Changes
-
-1. Configuration changes go in `config/<source_system>/`
-2. Transform logic goes in `src/transforms/<source_system>/`
-3. Engine changes go in `src/engine/`
-4. Pipeline definition changes go in `resources/transformation.yml`
-5. Test in dev first, then promote to test and prod
+- Never union streaming DataFrames in `framework/cdc.py`, `framework/engine.py`
+  or `data_products/`. One AUTO CDC flow per driver. A test enforces it.
+- Pure-Python modules (`config`, `naming`, `schema_drift`, `engine`) must not
+  touch Spark at import or registration time, so the graph tests run without a
+  JVM. Spark calls go inside the functions the pipeline executes.
+- Data products output their keys, `is_deleted` and a non-NULL
+  `source_extract_datetime`, and never `_change_type` / `_event_time`.
+- PII is hashed once, at the raw boundary. Don't add masking in trusted code.
+- New behaviour gets a test in `tests/`.

@@ -1,215 +1,141 @@
-# Databricks Accelerator
+# Databricks Accelerator: config-driven Lakeflow Declarative Pipelines
 
-A production-ready accelerator for building data transformation pipelines on Databricks using Lakeflow (DLT) with a YAML-driven configuration approach.
+One generic pipeline file. Every table comes from YAML. Developers write config
+and small transform modules, never pipeline code.
 
-## Overview
+This is the companion code for the talk **"Declarative Pipelines, Imperative
+Problems"**: a generic, runnable reference implementation of the patterns in the
+talk, with a fictional sample domain (products, customers, sales orders). It is
+everything-serverless and runs on **Databricks Free Edition**.
 
-This accelerator provides a framework for processing data through medallion architecture layers:
+## What's in it
 
-- **Bronze (Raw)** - Ingest from landing zone with Auto Loader, schema evolution, and housekeeping columns
-- **Silver (Cleansed)** - Apply transformations, data quality expectations, and deduplication
-- **Gold (Curated)** - Business-level aggregations and metrics (future)
-
-## Features
-
-- **YAML-Driven Configuration** - Define tables, sources, and expectations in YAML files
-- **Auto-Discovery** - Source systems are automatically discovered from the `config/` directory
-- **Data Quality** - Built-in expectation framework with drop, warn, and fail actions
-- **Databricks Asset Bundles** - Deployment via `databricks bundle deploy`
-- **Multi-Environment** - Separate dev, test, and prod targets
-- **CI/CD Ready** - GitHub Actions workflows for validation and deployment
+| Pattern | Where |
+|---|---|
+| One pipeline file generated from YAML, with registries for domains, keys and PII | `src/pipeline.py`, `src/framework/engine.py`, `conf/*.yml` |
+| Raw layer: Auto Loader into an append-only `raw_log_*`, then `AUTO CDC` into an SCD1 table with Change Data Feed | `engine.py` (`build_raw`) |
+| Trusted layer: data-product modules with a fixed `transform(spark, schemas, key_registry)` contract | `src/data_products/` |
+| Driver/satellite CDC: one AUTO CDC flow **per driver** into one target, satellites as static snapshots, no stream unions | `src/framework/cdc.py`, `engine.py` (`build_trusted`) |
+| PII by design: declare `pii_columns`, get a vaulted and a public stream (native `sha2`, hashed once at the raw boundary) | `src/framework/pii.py`, `engine.py` |
+| Schema-drift guard: detect column **type** changes before the run, `full_refresh_selection` for only the affected tables | `src/framework/schema_drift.py`, `src/jobs/schema_guard.py` |
+| Data quality as raw-vs-trusted reconciliation (missing either side + value mismatch), YAML rules, parallel | `src/framework/reconciliation.py`, `src/jobs/reconcile.py`, `conf/reconciliation.yml` |
+| Asset Bundle with `sandbox` / `dev` / `prod` targets | `databricks.yml`, `resources/` |
+| Unit tests, including one that fails the build on any stream union | `tests/` |
 
 ## Architecture
 
-```
-Landing Zone (Parquet)
-        │
-        ▼
-┌───────────────────┐
-│   Bronze Layer    │  raw.<source_system>.<table>
-│   (raw catalog)   │
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│   Silver Layer    │  cleansed.<source_system>.<table>
-│(cleansed catalog) │
-└───────────────────┘
-        │
-        ▼
-┌───────────────────┐
-│   Gold Layer      │  curated.<source_system>.<table>
-│(curated catalog)  │  (future)
-└───────────────────┘
-```
+```mermaid
+flowchart LR
+    subgraph landing["Landing zone (UC volume)"]
+        F[(parquet files<br/>_op, _extracted_at)]
+    end
 
-### Catalog Structure
+    subgraph raw["Raw layer (per source table)"]
+        L["raw_log_&lt;table&gt;<br/>append-only<br/>Auto Loader"]
+        S["&lt;table&gt;<br/>SCD Type 1, CDF on<br/>AUTO CDC"]
+    end
 
-```
-raw catalog (bronze)
-├── navision schema
-│   ├── customers
-│   ├── orders
-│   └── products
-└── entsog schema
-    ├── physical_flows
-    └── nominations
+    subgraph trusted["Trusted layer (per data product)"]
+        V1["view: product__driverA"]
+        V2["view: product__driverB"]
+        T["dim_ / fact_ table<br/>SCD Type 1"]
+    end
 
-cleansed catalog (silver)
-├── navision schema
-│   ├── customers_clean
-│   └── orders_enriched
-└── entsog schema
-    ├── physical_flows_clean
-    └── nominations_clean
+    G{{schema guard}} -.type change?<br/>full_refresh_selection.-> S
+    F --> L --> S
+    S -- "CDF stream (driver A)" --> V1
+    S -- "CDF stream (driver B)" --> V2
+    S -. "static snapshot (satellite)" .-> V1
+    V1 -- "AUTO CDC flow" --> T
+    V2 -- "AUTO CDC flow" --> T
+    T --> R{{reconciliation<br/>raw vs trusted}}
+    S --> R
 ```
 
-## Repository Structure
+With PII (shared targets only), each PII source gets a vaulted stream from
+landing and a public stream that reads the vault and hashes the PII columns:
 
-```
-.
-├── transformation/
-│   ├── databricks.yml              # Asset Bundle configuration
-│   ├── resources/
-│   │   └── transformation.yml      # DLT pipeline definition
-│   ├── src/
-│   │   ├── main.py                 # DLT entry point
-│   │   ├── engine/                 # Core engine modules
-│   │   │   ├── config_loader.py    # YAML parser
-│   │   │   ├── bronze.py           # Bronze layer utilities
-│   │   │   ├── silver.py           # Silver layer utilities
-│   │   │   └── expectations.py     # Data quality
-│   │   └── transforms/             # Source-specific transforms
-│   │       ├── navision/
-│   │       └── entsog/
-│   └── config/                     # YAML table definitions
-│       ├── navision/
-│       │   ├── bronze.yml
-│       │   └── silver.yml
-│       └── entsog/
-│           ├── bronze.yml
-│           └── silver.yml
-├── docs/                           # Documentation
-└── .github/workflows/              # CI/CD pipelines
-    ├── transformation-ci.yml       # PR validation
-    └── transformation-cd.yml       # Deployment
+```mermaid
+flowchart LR
+    F[(landing)] --> VL[pii_raw_d.raw_log_t] --> VS[pii_raw_d.t] --> VT[pii_trusted_d.product]
+    VL -- sha2 --> PL[raw_d.raw_log_t] --> PS[raw_d.t] --> PT[trusted_d.product]
 ```
 
-## Quick Start
+The scheduled job runs `schema_guard → pipeline → reconcile`.
 
-### Prerequisites
-
-1. Databricks CLI installed and configured
-2. Access to a Databricks workspace with Unity Catalog
-3. Landing zone storage containers with source data
-
-### Deploy
+## Quick start (Databricks Free Edition)
 
 ```bash
 cd transformation
+databricks auth login                                    # pick your workspace
+databricks bundle deploy -t sandbox
+databricks bundle run ldp_setup -t sandbox               # schemas + landing volume
+databricks bundle run ldp_sample_data -t sandbox         # initial load files
+databricks bundle run ldp_ingest -t sandbox              # guard -> pipeline -> reconcile
 
-# Set workspace URLs
-export DATABRICKS_HOST_DEV="https://adb-xxx.azuredatabricks.net"
-export DATABRICKS_HOST_TEST="https://adb-yyy.azuredatabricks.net"
-export DATABRICKS_HOST_PROD="https://adb-zzz.azuredatabricks.net"
-
-# Validate the bundle
-databricks bundle validate -t dev
-
-# Deploy to dev
-databricks bundle deploy -t dev
-
-# Deploy to prod
-databricks bundle deploy -t prod
+# then play:
+databricks bundle run ldp_sample_data -t sandbox --params batch=changes
+databricks bundle run ldp_ingest -t sandbox
+databricks bundle run ldp_sample_data -t sandbox --params batch=type_drift
+databricks bundle run ldp_ingest -t sandbox              # the guard refreshes sales_order_lines
 ```
 
-## Adding a New Source System
+`sandbox` puts every table in `workspace.sandbox_<you>` and builds no PII vault.
+Use `-t dev` to see the shared layout (`raw_<domain>`, `trusted_<domain>`,
+`pii_raw_<domain>`, `pii_trusted_<domain>`).
 
-1. **Create configuration files:**
-   ```
-   config/new_source/bronze.yml
-   config/new_source/silver.yml
-   ```
-
-2. **Create transform modules:**
-   ```
-   src/transforms/new_source/__init__.py
-   src/transforms/new_source/table1.py
-   ```
-
-3. **Deploy:**
-   ```bash
-   databricks bundle deploy -t dev
-   ```
-
-No additional pipeline configuration needed - source systems are auto-discovered!
-
-## Writing Transformations
-
-Transform functions receive DataFrames and return a transformed DataFrame:
-
-```python
-# transforms/navision/customers.py
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
-
-def transform(customers: DataFrame) -> DataFrame:
-    """Clean and standardize customer data."""
-    return (
-        customers
-        .filter(F.col("customer_id").isNotNull())
-        .withColumn("email", F.lower(F.trim(F.col("email"))))
-        .dropDuplicates(["customer_id"])
-    )
-```
-
-## Data Quality Expectations
-
-| Action | Behavior |
-|--------|----------|
-| `drop` | Invalid records are dropped |
-| `warn` | Invalid records kept, warning logged |
-| `fail` | Pipeline fails on invalid records |
-
-## CI/CD
-
-### GitHub Actions Workflows
-
-- **transformation-ci.yml** - Runs on PRs: lint, type-check, security scan, bundle validation
-- **transformation-cd.yml** - Deploys to environments: dev (auto), test, prod (with approvals)
-
-### Required Secrets
-
-| Secret | Description |
-|--------|-------------|
-| `DATABRICKS_HOST_DEV` | Dev workspace URL |
-| `DATABRICKS_TOKEN_DEV` | Dev workspace token |
-| `DATABRICKS_HOST_TEST` | Test workspace URL |
-| `DATABRICKS_TOKEN_TEST` | Test workspace token |
-| `DATABRICKS_HOST_PROD` | Prod workspace URL |
-| `DATABRICKS_TOKEN_PROD` | Prod workspace token |
-
-## Development
+## Run the tests
 
 ```bash
 cd transformation
-
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/ -v
-
-# Lint
-ruff check src/ tests/
-
-# Format
-black src/ tests/
-isort src/ tests/
+pip install -e ".[dev]"     # or: uv run --with ... pytest
+pytest
 ```
 
-## References
+Pure-Python tests (config, naming, the full pipeline graph against a fake `dp`,
+schema drift, the no-union rule) run anywhere. Spark-backed tests (PII masking,
+filters, surrogate keys, reconciliation, every data product's transform) need
+Java and are skipped without it. They run in CI (`.github/workflows/tests.yml`).
 
-- [Lakeflow Documentation](https://docs.databricks.com/en/dlt/)
-- [Databricks Asset Bundles](https://docs.databricks.com/en/dev-tools/bundles/)
-- [Auto Loader](https://docs.databricks.com/en/ingestion/auto-loader/)
+## Adding things
+
+- **A source table:** add an entry to `conf/sources.yml`. That's it.
+- **A data product:** add a module to `src/data_products/` (see its README for
+  the contract) and an entry to `conf/data_products.yml`.
+- **A reconciliation rule:** add it to `conf/reconciliation.yml`.
+
+## Maps to the talk
+
+| Talk section | Look at |
+|---|---|
+| One file, all config | `src/pipeline.py` (the whole thing is ~40 lines), `framework/engine.py`, `conf/` |
+| The module contract | `src/data_products/README.md`, `dim_product.py` |
+| Raw layer: Auto Loader + AUTO CDC + CDF | `engine.py` → `_register_raw_log_from_landing`, `_register_raw_scd1` |
+| Drivers and satellites | `framework/cdc.py`, `dim_product.py` (two drivers), `fact_sales_order_line.py` (satellites) |
+| PII by design | `conf/sources.yml` (`pii_columns`), `framework/pii.py`, `engine.build_raw` |
+| Problem 1: a column changes type | `framework/schema_drift.py`, `jobs/schema_guard.py`, sample batch `type_drift` |
+| Problem 2: stream-static joins | `fact_sales_order_line.py` docstring, sample batch `changes` (header date + category rename) |
+| Problem 2b: never union streams | `tests/test_no_stream_unions.py`, `cdc.selected_driver` |
+| Problem 3: expectations vs reconciliation | `framework/reconciliation.py`, `conf/reconciliation.yml` |
+
+## Layout
+
+```
+transformation/
+├── databricks.yml            bundle + targets (sandbox, dev, prod)
+├── resources/
+│   ├── pipeline.yml          the one serverless pipeline
+│   └── jobs.yml              ldp_ingest, ldp_setup, ldp_sample_data
+├── conf/
+│   ├── sources.yml           raw layer
+│   ├── data_products.yml     trusted layer
+│   └── reconciliation.yml    data-quality rules
+├── src/
+│   ├── pipeline.py           the ONE pipeline source file
+│   ├── framework/            engine, cdc, pii, keys, naming, schema_drift, reconciliation
+│   ├── data_products/        dim_product, dim_customer, fact_sales_order_line
+│   └── jobs/                 setup, generate_sample_data, schema_guard, reconcile
+└── tests/
+```
+
+Open items: see [TODO.md](TODO.md).

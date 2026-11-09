@@ -1,0 +1,39 @@
+# =============================================================================
+# Data products -> trusted layer
+# =============================================================================
+# Each entry points at a Python module in src/data_products/ that follows the
+# module contract (see src/data_products/README.md):
+#
+#   DATA_PRODUCT = {"keys": [...], "drivers": [...], "satellites": [...]}
+#   def transform(spark, schemas, key_registry) -> DataFrame
+#
+# The engine creates ONE AUTO CDC flow per driver into the same target table.
+# Streams are never unioned (see tests/test_no_stream_unions.py for why).
+#
+#   keys               target key(s) of the trusted table (SCD Type 1)
+#   allow_hard_deletes true  -> rows with is_deleted = true are removed
+#                      false -> rows stay with is_deleted = true (soft delete)
+#   pii_columns        output columns that carry PII. Creates a vaulted variant
+#                      in pii_trusted_<domain>; the public variant reads the
+#                      already-hashed public raw tables.
+# =============================================================================
+
+data_products:
+  - name: dim_product
+    domain: master_data
+    module: data_products.dim_product
+    keys: [product_key]
+    allow_hard_deletes: false
+
+  - name: dim_customer
+    domain: master_data
+    module: data_products.dim_customer
+    keys: [customer_key]
+    allow_hard_deletes: false
+    pii_columns: [contact_name, email, phone]
+
+  - name: fact_sales_order_line
+    domain: sales
+    module: data_products.fact_sales_order_line
+    keys: [sales_order_line_key]
+    allow_hard_deletes: true

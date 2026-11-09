@@ -1,63 +1,37 @@
-[build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "transformation-engine"
-version = "0.1.0"
-description = "YAML-driven transformation engine for Databricks DLT pipelines"
+name = "ldp-framework"
+version = "0.2.0"
+description = "Config-driven Lakeflow Declarative Pipelines framework for Databricks"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "PyYAML>=6.0",
-    "typing-extensions>=4.0",
 ]
-
-# Note: PySpark and dlt are provided by the Databricks runtime
-# and should not be included in production dependencies.
+# PySpark, pyspark.pipelines and databricks-sdk are provided by Databricks.
 
 [project.optional-dependencies]
 dev = [
-    # Linting
-    "ruff>=0.1.0",
-    # Type checking
-    "mypy>=1.0",
-    "types-PyYAML>=6.0",
-    # Code formatting
-    "black>=23.0",
-    "isort>=5.0",
+    "pytest>=8.0",
+    "pyspark>=4.1",       # 4.1+ ships pyspark.pipelines; Spark tests need Java
+    "databricks-sdk>=0.40",
+    "ruff>=0.6",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
 
 [tool.ruff]
-line-length = 88
-target-version = "py310"
-select = [
-    "E",   # pycodestyle errors
-    "W",   # pycodestyle warnings
-    "F",   # Pyflakes
-    "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
-    "UP",  # pyupgrade
-]
-ignore = [
-    "E501",  # line too long (handled by black)
-]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
 
-[tool.ruff.isort]
-known-first-party = ["engine", "transforms"]
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
 
-[tool.black]
-line-length = 88
-target-version = ["py310"]
+[tool.ruff.lint.isort]
+known-first-party = ["framework", "data_products"]
 
-[tool.isort]
-profile = "black"
-line_length = 88
-known_first_party = ["engine", "transforms"]
-
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-ignore_missing_imports = true
+[tool.ruff.lint.per-file-ignores]
+"src/jobs/generate_sample_data.py" = ["E501"]  # sample-data literals read better on one line

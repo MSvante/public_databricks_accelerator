@@ -1,0 +1,30 @@
+resources:
+  pipelines:
+    ldp_pipeline:
+      name: ldp_pipeline
+      catalog: ${var.catalog}
+      # Tables are published with fully qualified names to many schemas; this is
+      # only the default for anything left unqualified.
+      schema: ops
+      serverless: true
+      continuous: false
+      channel: CURRENT
+      libraries:
+        - glob:
+            include: ../src/pipeline.py
+      environment:
+        dependencies:
+          - pyyaml>=6.0
+      configuration:
+        bundle_root: ${workspace.file_path}
+        env: ${bundle.target}
+        catalog: ${var.catalog}
+        sandbox_schema: ${var.sandbox_schema}
+        landing_root: ${var.landing_root}
+        # Fail fast instead of retrying a broken flow over and over; the job
+        # owns retries.
+        pipelines.maxFlowRetryAttempts: "0"
+        pipelines.numUpdateRetryAttempts: "0"
+      notifications:
+        - email_recipients: ${var.alert_emails}
+          alerts: [on-update-failure, on-update-fatal-failure]

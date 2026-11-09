@@ -1,39 +1,28 @@
 # =============================================================================
-# Transformation Engine - CD Pipeline
+# Deploy (example: rename to .yml and add secrets to enable)
 # =============================================================================
-# Deploys all transformation pipelines to the selected Databricks environment.
+# Push to main deploys dev; prod is a manual dispatch behind a GitHub
+# environment with required reviewers.
 #
-# Triggers:
-#   - Push to main (auto-deploy to dev)
-#   - Manual trigger with environment selection
-#
-# All source systems are deployed together - no manual selection needed.
+# Required secrets per environment: DATABRICKS_HOST_<ENV>, DATABRICKS_TOKEN_<ENV>
+# (a service principal with OAuth M2M is better than a token in production)
 # =============================================================================
 
-name: Transformation CD
+name: Deploy
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'transformation/**'
-      - '.github/workflows/transformation-cd.yml'
+    branches: [main]
+    paths: ['transformation/**']
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to deploy'
+        description: Target to deploy
         required: true
         type: choice
-        options:
-          - dev
-          - test
-          - prod
+        options: [dev, prod]
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Deploy to Environment
-  # ---------------------------------------------------------------------------
   deploy:
     name: Deploy (${{ github.event.inputs.environment || 'dev' }})
     runs-on: ubuntu-latest
@@ -42,34 +31,15 @@ jobs:
     env:
       TARGET: ${{ github.event.inputs.environment || 'dev' }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Databricks CLI
-        uses: databricks/setup-cli@main
-
-      - name: Set environment variables
-        run: |
-          echo "DATABRICKS_HOST_DEV=${{ secrets.DATABRICKS_HOST_DEV }}" >> $GITHUB_ENV
-          echo "DATABRICKS_HOST_TEST=${{ secrets.DATABRICKS_HOST_TEST }}" >> $GITHUB_ENV
-          echo "DATABRICKS_HOST_PROD=${{ secrets.DATABRICKS_HOST_PROD }}" >> $GITHUB_ENV
-
-      - name: Validate bundle
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - name: Validate, deploy and create schemas
         working-directory: ./transformation
         env:
+          DATABRICKS_HOST: ${{ secrets[format('DATABRICKS_HOST_{0}', env.TARGET)] }}
           DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', env.TARGET)] }}
-        run: databricks bundle validate -t ${{ env.TARGET }}
-
-      - name: Deploy bundle
-        working-directory: ./transformation
-        env:
-          DATABRICKS_TOKEN: ${{ secrets[format('DATABRICKS_TOKEN_{0}', env.TARGET)] }}
-        run: databricks bundle deploy -t ${{ env.TARGET }}
-
-      - name: Deployment summary
         run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Environment**: ${{ env.TARGET }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Pipelines deployed**: All source systems" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: Success" >> $GITHUB_STEP_SUMMARY
+          databricks bundle validate -t "$TARGET"
+          databricks bundle deploy -t "$TARGET"
+          # schemas are derived from the YAML, so a new domain needs no manual step
+          databricks bundle run ldp_setup -t "$TARGET"
