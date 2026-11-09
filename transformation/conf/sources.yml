@@ -1,0 +1,59 @@
+# =============================================================================
+# Source tables -> raw layer
+# =============================================================================
+# Every entry becomes TWO pipeline objects (four if it has pii_columns):
+#
+#   raw_log_<name>   append-only streaming table, Auto Loader over landing_path
+#   <name>           SCD Type 1 table built with AUTO CDC, Change Data Feed on
+#
+# Nothing else is needed to onboard a table. The engine (src/pipeline.py)
+# loops over this file.
+#
+# Placeholders filled in at runtime:
+#   ${landing_root}  pipeline setting `landing_root` (a UC volume path)
+# =============================================================================
+
+# Applied to every source unless the source overrides the key.
+defaults:
+  format: parquet
+  timestamp_column: _extracted_at   # column in the landing file that orders changes
+  sequence_column: cdc_timestamp    # name it gets in the raw layer (cast to timestamp)
+  operation_column: _op             # I = insert, U = update, D = delete
+  delete_values: ["D"]
+
+sources:
+  # --- master data ----------------------------------------------------------
+  - name: products
+    domain: master_data
+    landing_path: ${landing_root}/master_data/products/
+    keys: [product_id]
+
+  - name: product_texts
+    domain: master_data
+    landing_path: ${landing_root}/master_data/product_texts/
+    keys: [product_id, language]
+
+  - name: product_categories
+    domain: master_data
+    landing_path: ${landing_root}/master_data/product_categories/
+    keys: [category_id]
+
+  - name: customers
+    domain: master_data
+    landing_path: ${landing_root}/master_data/customers/
+    keys: [customer_id]
+    # Declaring PII is ALL it takes: the engine creates a vaulted copy in
+    # pii_raw_<domain> and a public copy with these columns SHA-256 hashed.
+    pii_columns: [contact_name, email, phone]
+
+  # --- sales ----------------------------------------------------------------
+  - name: sales_orders
+    domain: sales
+    landing_path: ${landing_root}/sales/sales_orders/
+    keys: [order_id]
+
+  - name: sales_order_lines
+    domain: sales
+    landing_path: ${landing_root}/sales/sales_order_lines/
+    keys: [order_id, line_no]
+    cluster_by: [order_id]

@@ -1,0 +1,55 @@
+# =============================================================================
+# Raw-vs-trusted reconciliation rules
+# =============================================================================
+# Run by src/jobs/reconcile.py AFTER the pipeline. For each active rule:
+#
+#   1. run raw_query against the raw layer and trusted_query against trusted
+#   2. full-outer compare on key_columns
+#   3. report: key missing in trusted, key missing in raw, value mismatch
+#
+# Both queries must return the same column names. Write them as aggregates
+# (counts, sums, min/max timestamps) to keep the comparison cheap.
+#
+# Placeholders: {raw_<domain>} and {trusted_<domain>} resolve to the fully
+# qualified schema for the current target, e.g. {raw_sales} -> main.raw_sales
+# =============================================================================
+
+rules:
+  - rule_id: 1001
+    table_name: dim_product
+    key_columns: [product_id]
+    raw_query: >-
+      SELECT product_id, count(*) AS row_count, max(cdc_timestamp) AS last_change
+      FROM {raw_master_data}.products
+      GROUP BY product_id
+    trusted_query: >-
+      SELECT product_id, count(*) AS row_count, max(source_extract_datetime) AS last_change
+      FROM {trusted_master_data}.dim_product
+      WHERE is_deleted = false
+      GROUP BY product_id
+    is_active: true
+
+  - rule_id: 1002
+    table_name: fact_sales_order_line
+    key_columns: [order_id]
+    raw_query: >-
+      SELECT order_id, count(*) AS line_count,
+      CAST(sum(round(quantity * unit_price, 2)) AS decimal(18,2)) AS gross_amount
+      FROM {raw_sales}.sales_order_lines
+      GROUP BY order_id
+    trusted_query: >-
+      SELECT order_id, count(*) AS line_count,
+      CAST(sum(gross_amount) AS decimal(18,2)) AS gross_amount
+      FROM {trusted_sales}.fact_sales_order_line
+      GROUP BY order_id
+    is_active: true
+
+  - rule_id: 1003
+    table_name: dim_customer
+    key_columns: [customer_id]
+    raw_query: >-
+      SELECT customer_id, country FROM {raw_master_data}.customers
+    trusted_query: >-
+      SELECT customer_id, country FROM {trusted_master_data}.dim_customer
+      WHERE is_deleted = false
+    is_active: true

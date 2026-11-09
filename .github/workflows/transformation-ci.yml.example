@@ -1,157 +1,30 @@
 # =============================================================================
-# Transformation Engine - CI Pipeline
+# Bundle validation on PRs (example: rename to .yml and add secrets to enable)
 # =============================================================================
-# Runs on pull requests to validate transformation code changes.
+# Unit tests and lint already run in tests.yml without secrets. This adds a
+# `databricks bundle validate` against a real workspace.
+#
+# Required secrets: DATABRICKS_HOST_DEV, DATABRICKS_TOKEN_DEV
 # =============================================================================
 
-name: Transformation CI
+name: Bundle validate
 
 on:
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'transformation/**'
-      - '.github/workflows/transformation-ci.yml'
-
-env:
-  PYTHON_VERSION: '3.10'
+    branches: [main]
+    paths: ['transformation/**']
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Lint and Format Check
-  # ---------------------------------------------------------------------------
-  lint:
-    name: Lint
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - name: Validate bundle (sandbox and dev)
         working-directory: ./transformation
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_DEV }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_DEV }}
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run ruff
-        working-directory: ./transformation
-        run: ruff check src/
-
-      - name: Check formatting with black
-        working-directory: ./transformation
-        run: black --check src/
-
-      - name: Check import sorting with isort
-        working-directory: ./transformation
-        run: isort --check-only src/
-
-  # ---------------------------------------------------------------------------
-  # Type Checking
-  # ---------------------------------------------------------------------------
-  type-check:
-    name: Type Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies
-        working-directory: ./transformation
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run mypy
-        working-directory: ./transformation
-        run: mypy src/ --ignore-missing-imports --no-error-summary || true
-
-  # ---------------------------------------------------------------------------
-  # Security Scan
-  # ---------------------------------------------------------------------------
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Run Trufflehog
-        uses: trufflesecurity/trufflehog@main
-        with:
-          base: ${{ github.event.pull_request.base.sha }}
-          head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --only-verified
-
-  # ---------------------------------------------------------------------------
-  # Validate Databricks Bundle
-  # ---------------------------------------------------------------------------
-  validate-bundle:
-    name: Validate Bundle
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Databricks CLI
-        uses: databricks/setup-cli@main
-
-      - name: Validate bundle
-        working-directory: ./transformation
-        run: |
-          export DATABRICKS_HOST_DEV="https://dummy.azuredatabricks.net"
-          export DATABRICKS_HOST_TEST="https://dummy.azuredatabricks.net"
-          export DATABRICKS_HOST_PROD="https://dummy.azuredatabricks.net"
-          databricks bundle validate -t dev || echo "Bundle validation requires workspace connection, skipping..."
-
-  # ---------------------------------------------------------------------------
-  # YAML Validation
-  # ---------------------------------------------------------------------------
-  validate-yaml:
-    name: Validate YAML
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install PyYAML
-        run: pip install PyYAML
-
-      - name: Validate YAML files
-        run: |
-          python -c "
-          import yaml
-          import sys
-          from pathlib import Path
-
-          errors = []
-          for yml_file in Path('transformation/config').rglob('*.yml'):
-              try:
-                  with open(yml_file) as f:
-                      yaml.safe_load(f)
-                  print(f'OK: {yml_file}')
-              except Exception as e:
-                  errors.append(f'ERROR: {yml_file}: {e}')
-
-          if errors:
-              for err in errors:
-                  print(err, file=sys.stderr)
-              sys.exit(1)
-          "
+          databricks bundle validate -t sandbox
+          databricks bundle validate -t dev

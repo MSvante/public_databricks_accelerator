@@ -1,0 +1,116 @@
+resources:
+  jobs:
+    # -------------------------------------------------------------------------
+    # The scheduled run: schema guard -> pipeline -> reconciliation
+    # -------------------------------------------------------------------------
+    ldp_ingest:
+      name: ldp_ingest
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0 2 * * ?"
+        timezone_id: UTC
+        pause_status: ${var.schedule_pause_status}
+      email_notifications:
+        on_failure: ${var.alert_emails}
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+            dependencies: [pyyaml>=6.0, databricks-sdk>=0.40]
+      tasks:
+        - task_key: schema_guard
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/jobs/schema_guard.py
+            parameters:
+              - --bundle-root
+              - ${workspace.file_path}
+              - --env
+              - ${bundle.target}
+              - --catalog
+              - ${var.catalog}
+              - --sandbox-schema
+              - ${var.sandbox_schema}
+              - --landing-root
+              - ${var.landing_root}
+              - --pipeline-id
+              - ${resources.pipelines.ldp_pipeline.id}
+
+        - task_key: pipeline
+          depends_on: [{task_key: schema_guard}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.ldp_pipeline.id}
+
+        - task_key: reconcile
+          depends_on: [{task_key: pipeline}]
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/jobs/reconcile.py
+            parameters:
+              - --bundle-root
+              - ${workspace.file_path}
+              - --env
+              - ${bundle.target}
+              - --catalog
+              - ${var.catalog}
+              - --sandbox-schema
+              - ${var.sandbox_schema}
+              - --landing-root
+              - ${var.landing_root}
+
+    # -------------------------------------------------------------------------
+    # One-off: schemas + landing volume
+    # -------------------------------------------------------------------------
+    ldp_setup:
+      name: ldp_setup
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+            dependencies: [pyyaml>=6.0]
+      tasks:
+        - task_key: setup
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/jobs/setup.py
+            parameters:
+              - --bundle-root
+              - ${workspace.file_path}
+              - --env
+              - ${bundle.target}
+              - --catalog
+              - ${var.catalog}
+              - --sandbox-schema
+              - ${var.sandbox_schema}
+              - --landing-root
+              - ${var.landing_root}
+
+    # -------------------------------------------------------------------------
+    # Demo data: run with --batch initial | changes | type_drift
+    #   databricks bundle run ldp_sample_data -t sandbox --params batch=changes
+    # -------------------------------------------------------------------------
+    ldp_sample_data:
+      name: ldp_sample_data
+      parameters:
+        - name: batch
+          default: initial
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "2"
+      tasks:
+        - task_key: generate
+          environment_key: default
+          spark_python_task:
+            python_file: ../src/jobs/generate_sample_data.py
+            parameters:
+              - --bundle-root
+              - ${workspace.file_path}
+              - --env
+              - ${bundle.target}
+              - --catalog
+              - ${var.catalog}
+              - --landing-root
+              - ${var.landing_root}
+              - --batch
+              - "{{job.parameters.batch}}"
